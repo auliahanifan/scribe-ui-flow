@@ -1,54 +1,12 @@
-# Welcome to your Lovable project
-
-## Project info
-
-**URL**: https://lovable.dev/projects/45421d82-2126-47f8-a259-81b0aa7f4c72
-
-## How can I edit this code?
-
-There are several ways of editing your application.
-
-**Use Lovable**
-
-Simply visit the [Lovable Project](https://lovable.dev/projects/45421d82-2126-47f8-a259-81b0aa7f4c72) and start prompting.
+# Asha Health Scribe
 
 Changes made via Lovable will be committed automatically to this repo.
 
-**Use your preferred IDE**
+## About This Project
 
-If you want to work locally using your own IDE, you can clone this repo and push changes. Pushed changes will also be reflected in Lovable.
+Asha Health Scribe is a web application designed to assist healthcare professionals by transcribing spoken patient encounters in real-time and generating structured SOAP (Subjective, Objective, Assessment, Plan) notes. It leverages Deepgram for live audio transcription and an AI model (via OpenRouter) to process the transcription into a SOAP note format.
 
-The only requirement is having Node.js & npm installed - [install with nvm](https://github.com/nvm-sh/nvm#installing-and-updating)
-
-Follow these steps:
-
-```sh
-# Step 1: Clone the repository using the project's Git URL.
-git clone <YOUR_GIT_URL>
-
-# Step 2: Navigate to the project directory.
-cd <YOUR_PROJECT_NAME>
-
-# Step 3: Install the necessary dependencies.
-npm i
-
-# Step 4: Start the development server with auto-reloading and an instant preview.
-npm run dev
-```
-
-**Edit a file directly in GitHub**
-
-- Navigate to the desired file(s).
-- Click the "Edit" button (pencil icon) at the top right of the file view.
-- Make your changes and commit the changes.
-
-**Use GitHub Codespaces**
-
-- Navigate to the main page of your repository.
-- Click on the "Code" button (green button) near the top right.
-- Select the "Codespaces" tab.
-- Click on "New codespace" to launch a new Codespace environment.
-- Edit files directly within the Codespace and commit and push your changes once you're done.
+This tool aims to reduce administrative burden, allowing clinicians to focus more on patient care.
 
 ## What technologies are used for this project?
 
@@ -60,14 +18,21 @@ This project is built with:
 - shadcn-ui
 - Tailwind CSS
 
-## How can I deploy this project?
+### Running the Development Server
 
-Simply open [Lovable](https://lovable.dev/projects/45421d82-2126-47f8-a259-81b0aa7f4c72) and click on Share -> Publish.
+Once the dependencies are installed and environment variables are set, you can start the development server:
 
-## Can I connect a custom domain to my Lovable project?
+Using npm:
+```bash
+npm run dev
+```
+Or using yarn:
+```bash
+yarn dev
+```
+Or using pnpm:
+```bash
+pnpm dev
+```
 
-Yes, you can!
-
-To connect a domain, navigate to Project > Settings > Domains and click Connect Domain.
-
-Read more here: [Setting up a custom domain](https://docs.lovable.dev/tips-tricks/custom-domain#step-by-step-guide)
+This will typically start the application on `http://localhost:8080` (or another port if 8080 is busy). Open this URL in your browser to use the application.
