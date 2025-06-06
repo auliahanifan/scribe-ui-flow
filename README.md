@@ -18,6 +18,16 @@ This project is built with:
 - shadcn-ui
 - Tailwind CSS
 
+### Set up environment variables:
+
+-   Copy the example environment file:
+    ```bash
+    cp .env.example .env.local
+    ```
+-   Open `.env.local` and add your API keys:
+    -   `VITE_DEEPGRAM_API_KEY`: Your API key from [Deepgram](https://deepgram.com/).
+    -   `VITE_OPENROUTER_API_KEY`: Your API key from [OpenRouter](https://openrouter.ai/keys).
+
 ### Running the Development Server
 
 Once the dependencies are installed and environment variables are set, you can start the development server:
