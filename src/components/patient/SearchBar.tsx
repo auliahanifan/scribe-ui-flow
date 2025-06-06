@@ -50,7 +50,7 @@ export function SearchBar({
           <SelectItem value="in-progress">In Progress</SelectItem>
           <SelectItem value="completed">Completed</SelectItem>
         </SelectContent>
-      </SelectContent>
+      </Select>
     </div>
   );
 }
