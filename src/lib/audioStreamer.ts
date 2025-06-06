@@ -1,48 +1,53 @@
 import { useRecordingStore } from "./recordingStore";
 
 // IMPORTANT: Replace with your actual Deepgram API Key
-const DEEPGRAM_API_KEY = "d3fdd5e622cdc03c368bad9551c8121ff685c6bd";
+const DEEPGRAM_API_KEY = "c6c6637ddc6d78707f1564c3acfb40053b2de6d2";
 
 const AUDIO_CONFIG = {
   sampleRate: 16000,
   channelCount: 1,
-  // Deepgram expects audio/opus if using opus, or you can send PCM (audio/l16) directly.
-  // For MediaRecorder, 'audio/webm;codecs=opus' or 'audio/ogg;codecs=opus' are common for Opus.
-  // Ensure your Deepgram settings match the encoding.
+  // For browser-based MediaRecorder, these are the most widely supported formats
   mimeType: "audio/webm;codecs=opus",
-  timeslice: 250, // ms for chunking
+  timeslice: 250, // ms for chunking (20-250ms recommended by Deepgram)
   // Deepgram WebSocket URL parameters
-  // model: 'nova-2', // Or your preferred model
-  model: "nova-2-medical", // Using medical model as per project context
+  model: "nova-2", // You can use "nova-2-medical" for medical context
   language: "en-US",
-  encoding: "opus", // This should match the codec in mimeType
-  puncutate: "true",
+  encoding: "opus", // Must match the codec in mimeType
+  punctuate: "true", // Fixed typo: was "puncutate"
   interim_results: "true",
-  smart_format: "true", // Recommended for better transcript accuracy
-  // diarize: 'true', // Enable if speaker diarization is needed
+  smart_format: "true",
+  endpointing: "true", // Enable endpointing for better speech detection
+  utterance_end_ms: "1000", // Time to wait before ending utterance
 };
 
-function getDeepgramWebSocketUrl() {
-  let url = `wss://api.deepgram.com/v1/listen?model=${AUDIO_CONFIG.model}&language=${AUDIO_CONFIG.language}`;
-  url += `&encoding=${AUDIO_CONFIG.encoding}&sample_rate=${AUDIO_CONFIG.sampleRate}&channels=${AUDIO_CONFIG.channelCount}`;
-  url += `&punctuate=${AUDIO_CONFIG.puncutate}&interim_results=${AUDIO_CONFIG.interim_results}`;
-  url += `&smart_format=${AUDIO_CONFIG.smart_format}`;
-  // if (AUDIO_CONFIG.diarize) url += `&diarize=${AUDIO_CONFIG.diarize}`;
-  // For API key authentication via query param (less secure, but an option if header auth is complex for client WebSocket)
-  // url += `&token=${DEEPGRAM_API_KEY}`;
-  return url;
+function getDeepgramWebSocketUrl(): string {
+  const params = new URLSearchParams({
+    model: AUDIO_CONFIG.model,
+    language: AUDIO_CONFIG.language,
+    encoding: AUDIO_CONFIG.encoding,
+    sample_rate: AUDIO_CONFIG.sampleRate.toString(),
+    channels: AUDIO_CONFIG.channelCount.toString(),
+    punctuate: AUDIO_CONFIG.punctuate,
+    interim_results: AUDIO_CONFIG.interim_results,
+    smart_format: AUDIO_CONFIG.smart_format,
+    endpointing: AUDIO_CONFIG.endpointing,
+    utterance_end_ms: AUDIO_CONFIG.utterance_end_ms,
+  });
+
+  return `wss://api.deepgram.com/v1/listen?${params.toString()}`;
 }
 
 export class AudioStreamer {
   private mediaStream: MediaStream | null = null;
   private mediaRecorder: MediaRecorder | null = null;
   private websocket: WebSocket | null = null;
-  private audioContext: AudioContext | null = null;
+  private keepAliveInterval: NodeJS.Timeout | null = null;
 
   private reconnectAttempts: number = 0;
   private maxReconnectAttempts: number = 5;
   private reconnectDelay: number = 1000; // Initial delay 1s
   private shouldReconnect: boolean = true;
+  private isAuthenticated: boolean = false;
 
   constructor() {
     this.handleDataAvailable = this.handleDataAvailable.bind(this);
@@ -60,13 +65,14 @@ export class AudioStreamer {
         setConnectionStatus("error_mic_unsupported");
         return null;
       }
+
       this.mediaStream = await navigator.mediaDevices.getUserMedia({
         audio: {
           sampleRate: AUDIO_CONFIG.sampleRate,
           channelCount: AUDIO_CONFIG.channelCount,
-          // Potentially add noiseSuppression, echoCancellation if needed, but test performance
-          // noiseSuppression: true,
-          // echoCancellation: true,
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
         },
       });
       return this.mediaStream;
@@ -79,25 +85,19 @@ export class AudioStreamer {
 
   private setupWebSocket() {
     const { setConnectionStatus } = useRecordingStore.getState();
+
     if (this.websocket && this.websocket.readyState < WebSocket.CLOSING) {
       console.log("WebSocket already open or connecting.");
       return;
     }
-    /*
-    if (DEEPGRAM_API_KEY === "YOUR_DEEPGRAM_API_KEY") {
-      console.error(
-        "DEEPGRAM_API_KEY is not set. Please update it in audioStreamer.ts"
-      );
-      setConnectionStatus("error_config_api_key");
-      return;
-    } */
 
     const wsUrl = getDeepgramWebSocketUrl();
     console.log("Connecting to Deepgram WebSocket:", wsUrl);
     setConnectionStatus("connecting_ws");
-    this.websocket = new WebSocket(wsUrl);
-    // Deepgram expects binary data (audio)
-    // this.websocket.binaryType = 'arraybuffer'; // Default is blob, which is fine
+
+    // For browser-based connections, use Sec-WebSocket-Protocol for authentication
+    // This is the secure way to pass the API key from the browser
+    this.websocket = new WebSocket(wsUrl, ["token", DEEPGRAM_API_KEY]);
 
     this.websocket.onopen = this.handleWebSocketOpen;
     this.websocket.onmessage = this.handleWebSocketMessage;
@@ -107,25 +107,21 @@ export class AudioStreamer {
 
   private handleWebSocketOpen() {
     console.log("Deepgram WebSocket connection established.");
-    useRecordingStore.getState().setConnectionStatus("authenticating");
+    const { setConnectionStatus, setStreaming } = useRecordingStore.getState();
 
-    // Send API Key for authentication as the first message
-    // This is one way Deepgram supports auth if not using headers/tokens in URL
-    this.websocket?.send(
-      JSON.stringify({
-        type: "Authenticate",
-        api_key: DEEPGRAM_API_KEY,
-      })
-    );
+    // No need to send authentication message - it's handled via Sec-WebSocket-Protocol
+    setConnectionStatus("connected");
+    setStreaming(true);
+    this.isAuthenticated = true;
 
-    // The actual 'connected' status and streaming=true will be set upon successful auth
-    // or if Deepgram sends a ready message. For now, we assume auth message is enough to proceed.
-    // Deepgram typically starts sending messages (like Metadata) upon successful connection and auth.
+    // Reset reconnection attempts
+    this.reconnectAttempts = 0;
+    this.reconnectDelay = 1000;
 
-    this.reconnectAttempts = 0; // Reset reconnect attempts on successful connection
-    this.reconnectDelay = 1000; // Reset reconnect delay
+    // Start KeepAlive messages to maintain connection
+    this.startKeepAlive();
 
-    // Start MediaRecorder now that WebSocket is open and auth message sent
+    // Start MediaRecorder now that WebSocket is open
     if (this.mediaStream) {
       this.startMediaRecorder(this.mediaStream);
     }
@@ -134,67 +130,94 @@ export class AudioStreamer {
   private handleWebSocketMessage(event: MessageEvent) {
     const {
       setConnectionStatus,
-      setStreaming,
       appendTranscription,
       setPartialTranscription,
     } = useRecordingStore.getState();
-    try {
-      const messageData = JSON.parse(event.data as string);
-      // console.log('DG Message:', messageData);
 
+    try {
+      const messageData = JSON.parse(event.data);
+
+      // Handle different message types
       if (messageData.type === "Metadata") {
-        console.log("Deepgram Metadata:", messageData);
-        setConnectionStatus("connected"); // Consider fully connected after receiving metadata
-        setStreaming(true);
+        console.log("Deepgram Metadata received:", messageData);
+        return;
+      }
+
+      if (messageData.type === "Warning") {
+        console.warn("Deepgram Warning:", messageData);
         return;
       }
 
       if (messageData.type === "Error" || messageData.error) {
-        console.error(
-          "Deepgram Error:",
-          messageData.error || messageData.reason
-        );
+        console.error("Deepgram Error:", messageData.error || messageData);
         setConnectionStatus("error_deepgram_api");
-        // Potentially stop streaming or attempt to handle specific errors
-        this.stopStreaming(false); // Don't attempt reconnect on API errors like bad auth
+
+        // Handle specific error codes
+        if (messageData.error?.code === "INVALID_AUTH") {
+          this.stopStreaming(false); // Don't reconnect on auth errors
+        }
         return;
       }
 
-      if (
-        messageData.channel &&
-        messageData.channel.alternatives &&
-        messageData.channel.alternatives.length > 0
-      ) {
-        const transcript = messageData.channel.alternatives[0].transcript;
-        if (transcript && transcript.length > 0) {
-          if (messageData.is_final) {
-            // If speech_final is true, it's the absolute end of a phrase/sentence segment.
-            // If is_final is true but speech_final is false, it might be a word-final result.
-            // For simplicity, we'll append if is_final is true.
-            appendTranscription(transcript + " ");
-            setPartialTranscription(""); // Clear partial transcription
-          } else {
-            setPartialTranscription(transcript);
+      // Handle transcription results
+      if (messageData.type === "Results" && messageData.channel) {
+        const channel = messageData.channel;
+
+        if (channel.alternatives && channel.alternatives.length > 0) {
+          const transcript = channel.alternatives[0].transcript;
+
+          if (transcript && transcript.length > 0) {
+            if (messageData.is_final) {
+              // Final transcript - append to full transcription
+              appendTranscription(transcript + " ");
+              setPartialTranscription("");
+
+              // Log if this is end of speech
+              if (messageData.speech_final) {
+                console.log("End of speech detected");
+              }
+            } else {
+              // Interim transcript - update partial transcription
+              setPartialTranscription(transcript);
+            }
           }
         }
       }
     } catch (error) {
-      console.error("Error processing message from Deepgram:", error);
+      console.error("Error processing Deepgram message:", error);
     }
   }
 
   private handleWebSocketClose(event: CloseEvent) {
     console.log(
-      "Deepgram WebSocket connection closed:",
+      "Deepgram WebSocket closed:",
       event.code,
       event.reason,
-      "Was clean:",
+      "Clean:",
       event.wasClean
     );
-    const { setConnectionStatus, setStreaming } = useRecordingStore.getState();
-    this.cleanupMediaRecorder(); // Stop recorder if WS closes
-    setStreaming(false);
 
+    const { setConnectionStatus, setStreaming } = useRecordingStore.getState();
+
+    this.stopKeepAlive();
+    this.cleanupMediaRecorder();
+    setStreaming(false);
+    this.isAuthenticated = false;
+
+    // Handle specific close codes
+    if (event.code === 1008 && event.reason === "DATA-0000") {
+      console.error("Deepgram couldn't decode audio data");
+      setConnectionStatus("error_audio_format");
+      return;
+    }
+
+    if (event.code === 1011 && event.reason === "NET-0001") {
+      console.error("No audio received within timeout period");
+      setConnectionStatus("error_no_audio");
+      return;
+    }
+
+    // Attempt reconnection for transient errors
     if (
       this.shouldReconnect &&
       !event.wasClean &&
@@ -204,42 +227,50 @@ export class AudioStreamer {
       const delay = Math.min(
         this.reconnectDelay * Math.pow(2, this.reconnectAttempts - 1),
         30000
-      ); // Exponential backoff up to 30s
+      );
+
       console.log(
-        `Attempting to reconnect in ${delay / 1000}s (attempt ${
-          this.reconnectAttempts
-        }/${this.maxReconnectAttempts})`
+        `Reconnecting in ${delay / 1000}s (attempt ${this.reconnectAttempts}/${
+          this.maxReconnectAttempts
+        })`
       );
       setConnectionStatus(`reconnecting_attempt_${this.reconnectAttempts}`);
+
       setTimeout(() => {
         if (this.shouldReconnect) {
-          // Check again in case stopStreaming was called
           this.setupWebSocket();
         }
       }, delay);
-      this.reconnectDelay = delay; // Update for next potential cycle if this one fails early
     } else {
       setConnectionStatus(
         event.wasClean ? "disconnected" : "error_connection_lost"
       );
-      if (!event.wasClean) {
-        console.error(
-          "WebSocket disconnected unexpectedly and max reconnect attempts reached or reconnect disabled."
-        );
-      }
-      this.shouldReconnect = true; // Reset for next manual start
     }
   }
 
   private handleWebSocketError(event: Event) {
     console.error("Deepgram WebSocket error:", event);
-    // handleWebSocketClose will usually be called after an error, so it will handle reconnection.
-    // However, if onclose is not triggered, we ensure state is updated.
     const { setConnectionStatus, setStreaming } = useRecordingStore.getState();
     setConnectionStatus("error_websocket");
     setStreaming(false);
-    // No need to call cleanupMediaRecorder here as onclose should handle it.
-    // If onclose is not reliably called after onerror, then add cleanup here too.
+  }
+
+  private startKeepAlive() {
+    // Send KeepAlive messages every 8 seconds to prevent timeout
+    this.keepAliveInterval = setInterval(() => {
+      if (this.websocket && this.websocket.readyState === WebSocket.OPEN) {
+        const keepAliveMsg = JSON.stringify({ type: "KeepAlive" });
+        this.websocket.send(keepAliveMsg);
+        console.log("Sent KeepAlive message");
+      }
+    }, 8000);
+  }
+
+  private stopKeepAlive() {
+    if (this.keepAliveInterval) {
+      clearInterval(this.keepAliveInterval);
+      this.keepAliveInterval = null;
+    }
   }
 
   private startMediaRecorder(stream: MediaStream) {
@@ -247,50 +278,72 @@ export class AudioStreamer {
       console.log("MediaRecorder already active.");
       return;
     }
+
     try {
-      const options = { mimeType: AUDIO_CONFIG.mimeType }; // audioBitsPerSecond can be omitted for Opus
+      // Check if the preferred mimeType is supported
+      let options: MediaRecorderOptions = { mimeType: AUDIO_CONFIG.mimeType };
+
       if (!MediaRecorder.isTypeSupported(options.mimeType)) {
-        console.error(
-          `${options.mimeType} is not Supported by MediaRecorder! Check browser compatibility.`
+        console.warn(
+          `${options.mimeType} not supported, trying alternatives...`
         );
-        // Try a more common fallback like 'audio/webm' if opus isn't directly supported in webm container
-        // Or, if Deepgram supports it, consider sending raw PCM (requires different setup)
-        useRecordingStore
-          .getState()
-          .setConnectionStatus("error_recorder_mime_unsupported");
-        this.stopStreaming(false); // Stop if critical feature unsupported
-        return;
+
+        // Try alternative formats
+        const alternatives = [
+          "audio/webm;codecs=opus",
+          "audio/webm",
+          "audio/ogg;codecs=opus",
+          "audio/ogg",
+        ];
+
+        const supported = alternatives.find((mime) =>
+          MediaRecorder.isTypeSupported(mime)
+        );
+
+        if (!supported) {
+          throw new Error("No supported audio format found");
+        }
+
+        console.log(`Using supported format: ${supported}`);
+        options.mimeType = supported;
+
+        // Update encoding parameter based on selected format
+        // Note: This would require reconnecting with updated parameters
+        console.warn(
+          "Audio format mismatch may cause issues. Consider updating AUDIO_CONFIG."
+        );
       }
+
       this.mediaRecorder = new MediaRecorder(stream, options);
+
+      this.mediaRecorder.ondataavailable = this.handleDataAvailable;
+
+      this.mediaRecorder.onstop = () => {
+        console.log("MediaRecorder stopped.");
+        // Send CloseStream message when recorder stops
+        if (this.websocket && this.websocket.readyState === WebSocket.OPEN) {
+          console.log("Sending CloseStream to Deepgram.");
+          this.websocket.send(JSON.stringify({ type: "CloseStream" }));
+        }
+      };
+
+      this.mediaRecorder.onerror = (event: Event) => {
+        console.error("MediaRecorder error:", event);
+        useRecordingStore.getState().setConnectionStatus("error_recorder");
+        this.stopStreaming(true); // Attempt reconnect on recorder errors
+      };
+
+      this.mediaRecorder.start(AUDIO_CONFIG.timeslice);
+      console.log(
+        `MediaRecorder started with timeslice: ${AUDIO_CONFIG.timeslice}ms`
+      );
     } catch (e) {
       console.error("Exception while creating MediaRecorder:", e);
       useRecordingStore
         .getState()
         .setConnectionStatus("error_recorder_unsupported");
       this.stopStreaming(false);
-      return;
     }
-
-    this.mediaRecorder.ondataavailable = this.handleDataAvailable;
-    this.mediaRecorder.onstop = () => {
-      console.log("MediaRecorder stopped.");
-      // If WebSocket is still open, send CloseStream message
-      if (this.websocket && this.websocket.readyState === WebSocket.OPEN) {
-        console.log("Sending CloseStream to Deepgram.");
-        this.websocket.send(JSON.stringify({ type: "CloseStream" }));
-      }
-    };
-    this.mediaRecorder.onerror = (event: Event) => {
-      console.error("MediaRecorder error:", event);
-      useRecordingStore.getState().setConnectionStatus("error_recorder");
-      this.stopStreaming(true); // Attempt reconnect if recorder fails mid-stream
-    };
-
-    this.mediaRecorder.start(AUDIO_CONFIG.timeslice);
-    console.log(
-      "MediaRecorder started, streaming to Deepgram. Timeslice:",
-      AUDIO_CONFIG.timeslice
-    );
   }
 
   private handleDataAvailable(event: BlobEvent) {
@@ -298,18 +351,20 @@ export class AudioStreamer {
       event.data &&
       event.data.size > 0 &&
       this.websocket &&
-      this.websocket.readyState === WebSocket.OPEN
+      this.websocket.readyState === WebSocket.OPEN &&
+      this.isAuthenticated
     ) {
+      // Send audio data as binary WebSocket message
       this.websocket.send(event.data);
-    } else if (this.websocket && this.websocket.readyState !== WebSocket.OPEN) {
-      // console.warn('WebSocket not open, cannot send audio data. State:', this.websocket.readyState);
+    } else if (event.data && event.data.size === 0) {
+      console.warn("Received empty audio data blob");
     }
   }
 
   private cleanupMediaRecorder() {
     if (this.mediaRecorder && this.mediaRecorder.state !== "inactive") {
       console.log("Stopping MediaRecorder...");
-      this.mediaRecorder.stop(); // This will trigger onstop, which sends CloseStream
+      this.mediaRecorder.stop();
     }
     this.mediaRecorder = null;
   }
@@ -321,23 +376,27 @@ export class AudioStreamer {
     }
   }
 
-  private cleanupWebSocket(isGraceful = true) {
+  private cleanupWebSocket(graceful: boolean = true) {
+    this.stopKeepAlive();
+
     if (this.websocket) {
       if (this.websocket.readyState === WebSocket.OPEN) {
-        if (isGraceful) {
-          // MediaRecorder.onstop should send CloseStream. If stopping directly without recorder,
-          // send it here.
-          // this.websocket.send(JSON.stringify({ type: 'CloseStream' }));
-          console.log("Closing Deepgram WebSocket connection gracefully.");
+        if (graceful) {
+          // Send CloseStream message before closing
+          console.log("Sending CloseStream message...");
+          this.websocket.send(JSON.stringify({ type: "CloseStream" }));
+          console.log("Closing WebSocket connection gracefully...");
           this.websocket.close(1000, "Client initiated disconnect");
         } else {
-          console.log("Terminating Deepgram WebSocket connection.");
-          this.websocket.close(1001, "Client initiated termination"); // 1001: Going away
+          console.log("Terminating WebSocket connection...");
+          this.websocket.close(1001, "Going away");
         }
       } else if (this.websocket.readyState === WebSocket.CONNECTING) {
-        console.log("Aborting pending Deepgram WebSocket connection.");
-        this.websocket.close(1000, "Client aborted connection attempt");
+        console.log("Aborting pending WebSocket connection...");
+        this.websocket.close();
       }
+
+      // Clear event handlers
       this.websocket.onopen = null;
       this.websocket.onmessage = null;
       this.websocket.onclose = null;
@@ -349,45 +408,35 @@ export class AudioStreamer {
   public async startStreaming(): Promise<void> {
     const { startRecording, setConnectionStatus } =
       useRecordingStore.getState();
-    console.log("Attempting to start audio streaming to Deepgram...");
-    this.shouldReconnect = true; // Enable reconnection attempts for this session
-    this.reconnectAttempts = 0; // Reset for a fresh start
 
-    startRecording(); // Updates store: isRecording=true, resets transcripts, connectionStatus='connecting'
+    console.log("Starting audio streaming to Deepgram...");
+    this.shouldReconnect = true;
+    this.reconnectAttempts = 0;
+
+    startRecording(); // Updates store state
 
     const stream = await this.getMicrophoneAccess();
     if (!stream) {
-      console.error("Failed to get microphone access. Cannot start streaming.");
-      // getMicrophoneAccess already sets connectionStatus on error
-      // Ensure recording state is also reset if mic access fails critically
+      console.error("Failed to get microphone access.");
       useRecordingStore.getState().stopRecording();
       return;
     }
 
-    // AudioContext is not strictly necessary here as MediaRecorder handles encoding with constraints.
-    // this.audioContext = new AudioContext({ sampleRate: AUDIO_CONFIG.sampleRate });
-
-    this.setupWebSocket(); // This will try to open WebSocket and then start MediaRecorder on successful open & auth.
+    this.setupWebSocket();
   }
 
-  // Parameter to control if stop should allow reconnection, e.g. user stop vs error stop
   public stopStreaming(allowReconnect: boolean = false): void {
     const { stopRecording } = useRecordingStore.getState();
-    console.log("Stopping audio streaming to Deepgram...");
+
+    console.log("Stopping audio streaming...");
     this.shouldReconnect = allowReconnect;
 
-    // 1. Stop the recorder first. Its onstop will send CloseStream.
+    // Clean up in order
     this.cleanupMediaRecorder();
-    // 2. Then close the WebSocket connection.
-    this.cleanupWebSocket(true); // true for graceful
-    // 3. Release the microphone.
+    this.cleanupWebSocket(true);
     this.cleanupMediaStream();
 
-    if (this.audioContext && this.audioContext.state !== "closed") {
-      this.audioContext.close();
-      this.audioContext = null;
-    }
-    stopRecording(); // Updates store: isRecording=false
+    stopRecording();
     console.log("Audio streaming stopped.");
   }
 }

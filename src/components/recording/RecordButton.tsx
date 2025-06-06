@@ -8,9 +8,17 @@ interface RecordButtonProps {
   status: 'idle' | 'recording' | 'processing';
   onToggleRecording: () => void;
   recordingDuration?: number;
+  connectionStatus?: string;
+  isStreaming?: boolean;
 }
 
-export function RecordButton({ status, onToggleRecording, recordingDuration = 0 }: RecordButtonProps) {
+export function RecordButton({ 
+  status, 
+  onToggleRecording, 
+  recordingDuration = 0, 
+  connectionStatus = "Disconnected",
+  isStreaming = false 
+}: RecordButtonProps) {
   const [displayDuration, setDisplayDuration] = useState(0);
 
   useEffect(() => {
@@ -87,9 +95,16 @@ export function RecordButton({ status, onToggleRecording, recordingDuration = 0 
         </p>
         
         {status === 'recording' && (
-          <p className="text-lg font-mono text-red-600">
-            {formatDuration(displayDuration)}
-          </p>
+          <>
+            <p className="text-lg font-mono text-red-600">
+              {formatDuration(displayDuration)}
+            </p>
+            {isStreaming && (
+              <p className="text-xs text-gray-500">
+                {connectionStatus}
+              </p>
+            )}
+          </>
         )}
       </div>
     </div>
